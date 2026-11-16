@@ -240,13 +240,20 @@ def main():
     ap.add_argument("--term", "-t", help="term code, e.g. 202711 (default: newest College Station term)")
     ap.add_argument("--interval", "-i", type=int, default=90,
                     help="seconds between checks (default 90; please don't go below 30)")
-    ap.add_argument("--ntfy", help="ntfy.sh topic name for phone push notifications")
+    ap.add_argument("--ntfy", default=os.environ.get("NTFY_TOPIC") or None,
+                    help="ntfy.sh topic (or set the NTFY_TOPIC env var)")
+    ap.add_argument("--once", action="store_true",
+                    help="check one time and exit (for GitHub Actions / cron)")
+    ap.add_argument("--state-file", default="state.json",
+                    help="where --once remembers which sections were open")
     ap.add_argument("--discord", help="Discord webhook URL")
     ap.add_argument("--desktop", action="store_true", help="show desktop notifications")
     ap.add_argument("--list-terms", action="store_true", help="print term codes and exit")
     ap.add_argument("--status", action="store_true", help="print current status once and exit")
     ap.add_argument("--test-notify", action="store_true", help="send a test notification and exit")
     args = ap.parse_args()
+    if not args.discord and os.environ.get("DISCORD_WEBHOOK"):
+        args.discord = os.environ["DISCORD_WEBHOOK"]
 
     if args.test_notify:
         notify(args, "AggieWatch test", "If you see this, notifications work. Gig 'em!")
@@ -273,6 +280,22 @@ def main():
         print("(No notifier set - alerts will only print here. Try --ntfy or --desktop.)")
 
     state = {"open": {}, "missing_warned": set()}
+
+    if args.once:
+        try:
+            with open(args.state_file) as f:
+                saved = json.load(f)
+            if saved.get("term") == term:
+                state["open"] = saved.get("open", {})
+        except (OSError, ValueError):
+            pass
+        _, found = check_once(args, term, watches, state)
+        n_open = sum(1 for c in found if state["open"].get(c))
+        print(f"[{ts()}] checked {len(found)} section(s), {n_open} open")
+        new = {"term": term, "open": dict(sorted(state["open"].items()))}
+        with open(args.state_file, "w") as f:
+            json.dump(new, f, indent=1)
+        return
 
     if args.status:
         sections, _ = check_once(argparse.Namespace(ntfy=None, discord=None, desktop=False),
